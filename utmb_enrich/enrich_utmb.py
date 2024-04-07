@@ -1,6 +1,7 @@
 import asyncio
 import contextlib
 import json
+import random
 from itertools import chain
 from pathlib import Path
 from typing import Any
@@ -24,15 +25,20 @@ async def get_from_utmb(client: httpx.AsyncClient, url: str) -> httpx.Response:
     return await client.get(url=url)
 
 
-async def enrich_utmb(participants: list) -> list:
+async def enrich_utmb(participants: list, unstandard_names: dict[str, dict[str, str]]) -> list:
     tasks = []
     async with httpx.AsyncClient() as client, asyncio.TaskGroup() as tg:
         for participant in participants:
             sex = "F" if participant["sex"] == "F" else "H"  # french api O_o
             nationality_option = ""
             if (nationality := participant["nationality"]) != "not found":
+                nationality = unstandard_names["nationality"].get(participant["name"], nationality)
                 nationality_option = f"&nationality={nationality}"
-            names = participant["name"].replace(" ", "+")
+            names = (
+                unstandard_names["names"]
+                .get(participant["name"], participant["name"])
+                .replace(" ", "+")
+            )
             url = rf"https://api.utmb.world/search/runners?category=general&sex={sex}&ageGroup={nationality_option}&limit=1&offset=0&search={names}"
             tasks.append(tg.create_task(get_from_utmb(client=client, url=url)))
     for participant, task in zip(participants, tasks, strict=True):
@@ -72,7 +78,9 @@ def parse_participant_data(
     name_fields = [
         idx
         for idx, field in enumerate(fields)
-        if "name" in field["Expression"].lower() and "nation" not in field["Expression"].lower()
+        if "name" in field["Expression"].lower()
+        and "nation" not in field["Expression"].lower()
+        and "age" not in field["Expression"].lower()
     ]
     [gender_field] = [
         idx
@@ -94,9 +102,13 @@ def parse_participant_data(
 
         if len(nationality_fields) > 0:
             [nationality_field] = nationality_fields
-            input_country = unstandard_countries.get(
-                participant[nationality_field + 1], participant[nationality_field + 1]
-            )
+            nationality_raw: str = participant[nationality_field + 1].strip()
+            if "/" in nationality_raw and ".gif" in nationality_raw:
+                # Parsing nationality_raw with something like '[img:flags/IT.gif]'
+                nationality_normalized = nationality_raw.split("/")[-1].split(".")[0]
+            else:
+                nationality_normalized = nationality_raw
+            input_country = unstandard_countries.get(nationality_normalized, nationality_normalized)
             nationality = country_conv.convert(input_country, to="iso2")
             country_name = country_conv.convert(input_country, to="name_short")
         else:
@@ -117,10 +129,15 @@ def parse_participant_data(
             "race": race,
         }
         parsed_results.append(res)
+    logger.info(
+        f"Random extracted participant: {parsed_results[random.randrange(len(parsed_results))]}"  # noqa: S311
+    )
     return parsed_results
 
 
 def write_to_file(participants: list, filename: str, drop_columns: list[str]) -> None:
+    filename = filename.replace("/", "_")
+    (DATADIR / "json").mkdir(parents=True, exist_ok=True)
     if not participants:
         return
     participants.sort(key=lambda p: (-p.get("utmb_index", 0), p.get("name")))
@@ -137,6 +154,8 @@ def main() -> None:
 
     with (DATADIR / "unstandard_countries.json").open(encoding="utf-8") as fin:
         unstandard_countries = json.load(fin)
+    with (DATADIR / "unstandard_names.json").open(encoding="utf-8") as fin:
+        unstandard_names = json.load(fin)
     with (DATADIR / "unstandard_fifa_country_codes.json").open(encoding="utf-8") as fin:
         fifa_codes = json.load(fin)
         for elem in fifa_codes:
@@ -155,7 +174,7 @@ def main() -> None:
         for sex in ("M", "F"):
             participants_gender = [p for p in participants if p["sex"] == sex]
             participants_gender = asyncio.new_event_loop().run_until_complete(
-                enrich_utmb(participants_gender)
+                enrich_utmb(participants_gender, unstandard_names)
             )
             filename = race_name.replace("#", "").replace(" ", "_") + f"_{sex}"
             write_to_file(
