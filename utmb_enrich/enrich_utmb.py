@@ -42,20 +42,26 @@ async def enrich_itra(participants: list, unstandard_names: dict[str, dict[str, 
         participant["itra_score"] = 0  # to be overwritten later
         if len(runners) > 0:
             selected_runner = runners[0]  # pick first result
-            startlist_name = unidecode(participant["name"]).replace("-", " ")
+            startlist_name = unidecode(participant["name"]).replace("-", " ").replace(".", " ")
             itra_name = (
                 unidecode(selected_runner["firstName"])
                 + " "
                 + unidecode(selected_runner["lastName"])
-            )
-            capital_startlist_names = [n for n in startlist_name.split() if n.upper() == n]
-            capital_itra_names = [n for n in itra_name.split() if n.upper() == n]
+            ).replace(".", " ")
+            both_have_capital_last_names = any(
+                name.upper() == name for name in itra_name.split()
+            ) and any(name.upper() == name for name in startlist_name.split())
+            itra_name_set = {
+                name if name.upper() == name and both_have_capital_last_names else name.lower()
+                for name in itra_name.split()
+            }
+            startlist_name_set = {
+                name if name.upper() == name and both_have_capital_last_names else name.lower()
+                for name in startlist_name.split()
+            }
 
-            if (
-                all(csn in capital_itra_names for csn in capital_startlist_names)
-                or all(cun in capital_startlist_names for cun in capital_itra_names)
-                or startlist_name.lower() == itra_name.lower()
-                or startlist_name.lower() == " ".join(reversed(itra_name.lower().split()))
+            if itra_name_set.issubset(startlist_name_set) or startlist_name_set.issubset(
+                itra_name_set
             ):
                 nationality = country_converter.CountryConverter().convert(
                     selected_runner["nationality"], to="iso2"
