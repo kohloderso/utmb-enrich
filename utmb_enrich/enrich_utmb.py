@@ -21,49 +21,57 @@ DATADIR = Path(__file__).parent.parent / "data"
 
 # @retry(retry=retry_if_exception_type(httpx.ConnectTimeout), wait=wait_random(min=0.1, max=1.5))
 @retry(wait=wait_random(min=0.1, max=1.5))
-async def get_from_utmb(client: httpx.AsyncClient, url: str) -> httpx.Response:
-    return await client.get(url=url)
+async def get_from_website(client: httpx.AsyncClient, url: str, data: dict) -> httpx.Response:
+    headers = {  # necessary for ITRA API requests, otherwise you get error 403
+        "user-agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
+    }
+    return await client.post(url=url, data=data, headers=headers)
 
 
-async def enrich_utmb(participants: list, unstandard_names: dict[str, dict[str, str]]) -> list:
+async def enrich_itra(participants: list, unstandard_names: dict[str, dict[str, str]]) -> list:
     tasks = []
-    async with httpx.AsyncClient() as client, asyncio.TaskGroup() as tg:
+    async with httpx.AsyncClient(timeout=60) as client, asyncio.TaskGroup() as tg:
         for participant in participants:
-            sex = "F" if participant["sex"] == "F" else "H"  # french api O_o
-            nationality_option = ""
-            if (nationality := participant["nationality"]) != "not found":
-                nationality = unstandard_names["nationality"].get(participant["name"], nationality)
-                nationality_option = f"&nationality={nationality}"
-            names = (
-                unstandard_names["names"]
-                .get(participant["name"], participant["name"])
-                .replace(" ", "+")
-            )
-            url = rf"https://api.utmb.world/search/runners?category=general&sex={sex}&ageGroup={nationality_option}&limit=1&offset=0&search={names}"
-            tasks.append(tg.create_task(get_from_utmb(client=client, url=url)))
+            names = unstandard_names["names"].get(participant["name"], participant["name"])
+            data = {"name": names, "start": "1", "count": "10"}
+            url = "https://itra.run/api/runner/find"
+            tasks.append(tg.create_task(get_from_website(client=client, url=url, data=data)))
     for participant, task in zip(participants, tasks, strict=True):
         result = task.result().json()
-        runners = result["runners"]
-        participant["utmb_index"] = 0  # to be overwritten later
+        runners = result["results"]
+        participant["itra_score"] = 0  # to be overwritten later
         if len(runners) > 0:
             selected_runner = runners[0]  # pick first result
             startlist_name = unidecode(participant["name"]).replace("-", " ")
-            utmb_name = unidecode(selected_runner["fullname"]).replace("-", " ")
+            itra_name = (
+                unidecode(selected_runner["firstName"])
+                + " "
+                + unidecode(selected_runner["lastName"])
+            )
             capital_startlist_names = [n for n in startlist_name.split() if n.upper() == n]
-            capital_utmb_names = [n for n in utmb_name.split() if n.upper() == n]
+            capital_itra_names = [n for n in itra_name.split() if n.upper() == n]
 
             if (
-                all(csn in capital_utmb_names for csn in capital_startlist_names)
-                or all(cun in capital_startlist_names for cun in capital_utmb_names)
-                or startlist_name.lower() == utmb_name.lower()
-                or startlist_name.lower() == " ".join(reversed(utmb_name.lower().split()))
+                all(csn in capital_itra_names for csn in capital_startlist_names)
+                or all(cun in capital_startlist_names for cun in capital_itra_names)
+                or startlist_name.lower() == itra_name.lower()
+                or startlist_name.lower() == " ".join(reversed(itra_name.lower().split()))
             ):
-                participant["utmb_index"] = selected_runner["ip"]
-                participant["utmb_agegroup"] = selected_runner["ageGroup"]
-                participant["utmb_uri"] = f"https://utmb.world/en/runner/{selected_runner['uri']}"
-                participant["utmb_name"] = selected_runner["fullname"]
+                nationality = country_converter.CountryConverter().convert(
+                    selected_runner["nationality"], to="iso2"
+                )
+                if selected_runner["pi"] is not None:
+                    participant["itra_score"] = selected_runner["pi"]
+                participant["itra_agegroup"] = selected_runner["ageGroup"]
+                participant["itra_nationality"] = (
+                    f"{flag.flag(nationality)} ({selected_runner["nationality"]})"
+                )
+                participant["itra_uri"] = (
+                    f"https://itra.run/RunnerSpace/{selected_runner['lastName']}.{selected_runner['firstName']}/{selected_runner['runnerId']}"
+                )
+                participant["itra_name"] = itra_name
             else:
-                logger.warning(f"Name mismatch {startlist_name=} {utmb_name=}")
+                logger.warning(f"Name mismatch {startlist_name=} {itra_name=}")
 
     return participants
 
@@ -140,7 +148,7 @@ def write_to_file(participants: list, filename: str, drop_columns: list[str]) ->
     (DATADIR / "json").mkdir(parents=True, exist_ok=True)
     if not participants:
         return
-    participants.sort(key=lambda p: (-p.get("utmb_index", 0), p.get("name")))
+    participants.sort(key=lambda p: (-p.get("itra_score", 0), p.get("name")))
     enhanced_df = pd.DataFrame(participants).drop(columns=drop_columns)
     enhanced_df.to_csv(DATADIR / f"{filename}.csv", index=False)
     with (DATADIR / "json" / f"{filename}.json").open("w", encoding="utf-8") as fout:
@@ -148,7 +156,7 @@ def write_to_file(participants: list, filename: str, drop_columns: list[str]) ->
 
 
 def main() -> None:
-    logger.info("Enriching Runners via UTMB website")
+    logger.info("Enriching Runners via ITRA website")
     with (DATADIR / "runners.json").open(encoding="utf-8") as fin:
         dat = json.load(fin)
 
@@ -174,7 +182,7 @@ def main() -> None:
         for sex in ("M", "F"):
             participants_gender = [p for p in participants if p["sex"] == sex]
             participants_gender = asyncio.new_event_loop().run_until_complete(
-                enrich_utmb(participants_gender, unstandard_names)
+                enrich_itra(participants_gender, unstandard_names)
             )
             filename = race_name.replace("#", "").replace(" ", "_") + f"_{sex}"
             write_to_file(
