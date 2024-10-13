@@ -4,19 +4,114 @@ import json
 import random
 from itertools import chain
 from pathlib import Path
-from typing import Any
+from typing import Any, List, cast
 
 import country_converter  # type: ignore[import]
 import flag
 import httpx
 import pandas as pd
+import streamlit as st
 import typer
 from loguru import logger
+from pandas import DataFrame
 from tenacity import retry, wait_random
 from tqdm import tqdm
 from unidecode import unidecode
 
-DATADIR = Path(__file__).parent.parent / "data"
+st.title("UTMB/ITRA Analyzer")
+
+race_result_url = st.text_input(
+    label="Enter RaceResult URL", placeholder="https://my.raceresult.com/268244/"
+)
+
+
+def parse_contests(contests: dict) -> DataFrame:
+    contest_df = pd.DataFrame(list(contests.items()), columns=["ID", "Race"])
+    contest_df["ID"] = pd.to_numeric(contest_df["ID"])
+    return contest_df
+
+
+def parse_participant_lists(lists_json: list[dict], contests_df: DataFrame) -> DataFrame:
+    # replace contest id with name
+    lists = [
+        {
+            "Name": item["Name"],
+            "ShowAs": item["ShowAs"],
+            "Contest": int(item["Contest"]),
+        }
+        for item in lists_json
+    ]
+    # Perform a merge to replace the Contest ID with the Contest name
+    merged_df = pd.DataFrame(lists).merge(contests_df, left_on="Contest", right_on="ID", how="left")
+    merged_df = merged_df.drop(columns=["ID"])
+    return pd.DataFrame(merged_df)
+
+
+def load_participant_list(key: str, listname: str, contest_id: int) -> None:
+    params = {
+        "key": key,
+        "listname": listname,
+        # "page": "participants",
+        "contest": str(contest_id),
+        # "r": "all",
+        # "l": "0",
+    }
+    response = httpx.get(url=race_result_url + "/RRPublish/data/list", params=params)
+    response_json = response.json()
+    races = response_json["data"]
+    fields = response_json["list"]["Fields"]
+    columns = [""] + [field["Expression"] for field in fields]
+
+    for race_name, participants in races.items():
+        st.subheader(race_name)
+        participants_df = pd.DataFrame(participants)
+        # drop additional columns for which we don't have a description (e.g. color columns)
+        if participants_df.shape[1] > len(columns):
+            to_drop = participants_df.shape[1] - len(columns)
+            participants_df = participants_df.drop(participants_df.columns[-to_drop:], axis=1)
+        participants_df.columns = columns  # type: ignore[assignment]
+        # drop empty column if it exists
+        if '""' in participants_df.columns:
+            participants_df = participants_df.drop('""', axis=1)
+        st.dataframe(
+            participants_df,
+            hide_index=True,
+        )
+        st.button("Enrich with ITRA points")
+        st.button("Enrich with UTMB points")
+
+
+def load_participant_overview(race_result_url: str) -> None:
+    response = httpx.get(
+        url=race_result_url + "/RRPublish/data/config?page=participants&noVisitor=1"
+    )
+    result_json = cast(dict, response.json())
+    eventname = result_json.get("eventname", "")
+    st.divider()
+    st.header(eventname)
+    contests = parse_contests(result_json.get("contests", {}))
+    lists_df = parse_participant_lists(result_json.get("lists", []), contests)
+    list_sel = lists_df.apply(
+        lambda row: f"{row['ShowAs']} {"(all races)" if pd.isna(row['Race']) else row['Race']}",
+        axis=1,
+    )
+    selected_list = st.selectbox(
+        "Select an available list",
+        options=range(len(list_sel)),
+        index=None,
+        format_func=lambda x: list_sel[x],
+    )
+
+    if selected_list is not None:
+        load_participant_list(
+            result_json["key"],
+            lists_df.iloc[selected_list]["Name"],
+            lists_df.iloc[selected_list]["Contest"],
+        )
+
+
+if race_result_url is not None and race_result_url != "":
+    load_participant_overview(race_result_url)
 
 
 # @retry(retry=retry_if_exception_type(httpx.ConnectTimeout), wait=wait_random(min=0.1, max=1.5))
@@ -205,9 +300,9 @@ def main() -> None:
     logger.info("Enriching completed")
 
 
-def run() -> None:  # entry point via pyproject.toml
-    typer.run(main)
+# def run() -> None:  # entry point via pyproject.toml
+#     typer.run(main)
 
 
-if __name__ == "__main__":
-    typer.run(main)
+# if __name__ == "__main__":
+#     typer.run(main)

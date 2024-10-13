@@ -17,6 +17,7 @@ tenacity = ">=8.2.2"
 tqdm = ">=4.65.0"
 typer = ">=0.9.0"
 unidecode = ">=1.3.6"
+streamlit = "^1.39.0"
 
 [tool.poetry.group.dev.dependencies]
 black = { extras = ["jupyter"], version = ">=23.3.0" }
