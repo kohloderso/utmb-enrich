@@ -18,6 +18,7 @@ from tenacity import retry, wait_random
 from tqdm import tqdm
 from unidecode import unidecode
 
+st.set_page_config(layout="wide")
 st.title("UTMB/ITRA Analyzer")
 
 race_result_url = st.text_input(
@@ -45,6 +46,15 @@ def parse_participant_lists(lists_json: list[dict], contests_df: DataFrame) -> D
     merged_df = pd.DataFrame(lists).merge(contests_df, left_on="Contest", right_on="ID", how="left")
     merged_df = merged_df.drop(columns=["ID"])
     return pd.DataFrame(merged_df)
+
+
+def enrich_utmb(participants_df: DataFrame) -> None:
+    participants_df["UTMB points"] = 0
+    st.write(participants_df)
+
+
+def enrich_itra(participants_df: DataFrame) -> None:
+    participants_df["ITRA points"] = 0
 
 
 def load_participant_list(key: str, listname: str, contest_id: int) -> None:
@@ -77,8 +87,11 @@ def load_participant_list(key: str, listname: str, contest_id: int) -> None:
             participants_df,
             hide_index=True,
         )
-        st.button("Enrich with ITRA points")
-        st.button("Enrich with UTMB points")
+        col1, col2 = st.columns(2)
+        if col1.button("Enrich with ITRA points", type="primary"):
+            enrich_itra(participants_df)
+        if col2.button("Enrich with UTMB points", type="primary"):
+            enrich_utmb(participants_df)
 
 
 def load_participant_overview(race_result_url: str) -> None:
