@@ -20,5 +20,4 @@ Assumes poetry and python-3.11 is already installed.
 
 ```shell
 poetry install
-poetry run utmb-enrich
 ```

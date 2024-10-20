@@ -2,15 +2,14 @@ from typing import cast
 
 import httpx
 import pandas as pd
-import streamlit as st
 from loguru import logger
+from tenacity import retry, wait_random
 
-from utmb_enrich.parser import parse_contests, parse_participant_lists
+from trailrunning_scoring.parser import parse_participant_lists
 
-### HTTP requests to raceresult API
+### HTTP requests to raceresult, ITRA and UTMB APIs
 
 
-@st.cache_data
 def load_participant_list(
     race_result_url: str, key: str, listname: str, contest_id: int
 ) -> tuple[dict[str, pd.DataFrame], list[str]]:
@@ -35,16 +34,26 @@ def load_participant_list(
             race_participants[race_name] = pd.DataFrame(participants)
     elif isinstance(races, list):
         race_participants[""] = pd.DataFrame(races)
+
     return race_participants, columns
 
 
-@st.cache_data
-def load_event_overview(race_result_url: str) -> tuple[str, str, pd.DataFrame]:
+def load_event_overview(race_result_url: str) -> tuple[str, list[dict[str, str]]]:
     response = httpx.get(
         url=race_result_url + "/RRPublish/data/config?page=participants&noVisitor=1"
     )
     result_json = cast(dict, response.json())
     eventname = result_json.get("eventname", "")
-    contests = parse_contests(result_json.get("contests", {}))
-    participant_lists = parse_participant_lists(result_json.get("lists", []), contests)
-    return result_json["key"], eventname, participant_lists
+    participant_lists = parse_participant_lists(
+        result_json.get("key", ""), result_json.get("lists", []), result_json.get("contests", {})
+    )
+    return eventname, participant_lists
+
+
+# @retry(retry=retry_if_exception_type(httpx.ConnectTimeout), wait=wait_random(min=0.1, max=1.5))
+@retry(wait=wait_random(min=0.1, max=1.5))
+async def get_from_website(client: httpx.AsyncClient, url: str, data: dict) -> httpx.Response:
+    headers = {  # necessary for ITRA API requests, otherwise you get error 403
+        "user-agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
+    }
+    return await client.post(url=url, data=data, headers=headers)

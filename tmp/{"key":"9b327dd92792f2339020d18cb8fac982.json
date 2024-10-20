@@ -1,0 +1,76 @@
+{
+  "key": "9b327dd92792f2339020d18cb8fac982",
+  "contests": {
+    "1": "Karwendellauf 52 Km",
+    "2": "Karwendelmarsch 35 Km",
+    "3": "Karwendelmarsch 52 Km"
+  },
+  "splits": [],
+  "lists": [
+    {
+      "Name": "Teilnehmerlisten|Teilnehmerliste_ohneStartNr_Ges_online",
+      "Mode": "hidden",
+      "Contest": "0",
+      "ShowAs": "Teilnehmerliste",
+      "Format": "VP",
+      "Live": 0,
+      "Sortable": 1,
+      "Leader": 0,
+      "Details": "",
+      "ID": "E9B2AA"
+    },
+    {
+      "Name": "Teilnehmerlisten|Teilnehmerliste_ohneStartNr_online",
+      "Mode": "hidden",
+      "Contest": "1",
+      "ShowAs": "Teilnehmerliste",
+      "Format": "VP",
+      "Live": 0,
+      "Sortable": 1,
+      "Leader": 0,
+      "Details": "",
+      "ID": "205AB2"
+    },
+    {
+      "Name": "Teilnehmerlisten|Teilnehmerliste_ohneStartNr_online",
+      "Mode": "hidden",
+      "Contest": "2",
+      "ShowAs": "Teilnehmerliste",
+      "Format": "VP",
+      "Live": 0,
+      "Sortable": 1,
+      "Leader": 0,
+      "Details": "",
+      "ID": "498CD2"
+    },
+    {
+      "Name": "Teilnehmerlisten|Teilnehmerliste_ohneStartNr_online",
+      "Mode": "hidden",
+      "Contest": "3",
+      "ShowAs": "Teilnehmerliste",
+      "Format": "VP",
+      "Live": 0,
+      "Sortable": 1,
+      "Leader": 0,
+      "Details": "",
+      "ID": "EFB736"
+    }
+  ],
+  "infotext": "",
+  "LinkCertificates": false,
+  "LeaderboardHideCount": true,
+  "DisableiComments": true,
+  "PhotographerEventID": "",
+  "eventname": "Karwendelmarsch 2024",
+  "showResults": true,
+  "showParticipants": false,
+  "showLive": false,
+  "showCertificates": true,
+  "ListSelector": "boxes",
+  "SplitConfig": "",
+  "TimerLogo": "my\\Logo.png",
+  "TimerURL": "www.raceresult-timing.de",
+  "EventOver": true,
+  "Time": 44737,
+  "server": "my3.raceresult.com"
+}

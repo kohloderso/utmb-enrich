@@ -1,8 +1,8 @@
 [tool.poetry]
-name = "utmb-enrich"
+name = "trailrunning-scoring"
 version = "0.0.1"
 description = ""
-authors = ["Me myself and I <notmymail@bar.com>"]
+authors = ["Christina Kirk and Peter Kirk <kirk.running@proton.me>"]
 
 [tool.poetry.dependencies]
 python = ">=3.11,<=3.12"
@@ -17,7 +17,7 @@ tenacity = ">=8.2.2"
 tqdm = ">=4.65.0"
 typer = ">=0.9.0"
 unidecode = ">=1.3.6"
-streamlit = "^1.39.0"
+fastapi = { extras = ["standard"], version = "^0.115.2" }
 
 [tool.poetry.group.dev.dependencies]
 black = { extras = ["jupyter"], version = ">=23.3.0" }
@@ -33,13 +33,13 @@ requires = ["poetry-core>=1.0.0"]
 build-backend = "poetry.core.masonry.api"
 
 [tool.poetry.scripts]
-utmb-enrich = 'utmb_enrich.enrich_utmb:run'
+
 
 [tool.black]
 line-length = 100
 
 [tool.mypy]
-files = ["utmb_enrich"]
+files = ["trailrunning-scoring"]
 python_version = "3.11"
 warn_unreachable = true
 warn_return_any = true
@@ -51,6 +51,7 @@ exclude = [".git/", ".venv/", "__pycache__"]
 follow_imports = "normal"
 pretty = true
 warn_incomplete_stub = true
+strict = true
 
 [tool.ruff]
 line-length = 100
@@ -89,4 +90,4 @@ unfixable = [
 ]
 
 [tool.ruff.lint.isort]
-known-first-party = ["utmb-enrich"]
+known-first-party = ["trailrunning-scoring"]
