@@ -1,10 +1,12 @@
+import json
 from enum import StrEnum
 from itertools import chain
 from typing import Any
 
 import httpx
 import pandas as pd
-from fastapi import FastAPI, HTTPException
+import uvicorn
+from fastapi import BackgroundTasks, FastAPI, HTTPException, status
 from fastapi.responses import JSONResponse
 from loguru import logger
 
@@ -13,7 +15,7 @@ from trailrunning_scoring.api_requests import (
     load_event_overview,
     load_participant_list,
 )
-from trailrunning_scoring.parser import clean_participants_df
+from trailrunning_scoring.parser import Person
 
 
 class PointSystem(StrEnum):
@@ -24,23 +26,13 @@ class PointSystem(StrEnum):
 app = FastAPI()
 
 
-class Person:
-    def __init__(self, firstname: str, lastname: str, nationality: str, age: int) -> None:  # noqa: D107
-        self.firstname = firstname
-        self.lastname = lastname
-        self.nationality = nationality
-        self.age = age
-        self.itra_points: int = 0
-        self.utmb_points: int = 0
-
-
 @app.get("/score")
 async def get_score(system: PointSystem, name: str, age: int = -1, nationality: str = "") -> Any:
     """Get the score of a participant."""
     if system == PointSystem.itra:
-        return await get_itra_score(
-            person=Person(firstname=name, lastname="", nationality=nationality, age=age)
-        )
+        person = Person(firstname=name, lastname="", nationality=nationality, age=age)
+        await update_itra_score(person=person)
+        return person.itra_points
     assert system == PointSystem.utmb
     return await get_utmb_score(
         person=Person(firstname=name, lastname="", nationality=nationality, age=age)
@@ -61,15 +53,36 @@ def get_lists(url: str) -> dict[str, Any]:
 
 @app.get("/participants")
 def get_participants(url: str, parameters: str) -> Any:
-    response = httpx.get(url=url + "/RRPublish/data/list" + parameters)
-    return response.json()
+    result = load_participant_list(race_result_url=url, params=parameters)
+    # map each item of result from dataframe to json
+    result_json = {
+        race_name: [json.dumps(person.__dict__) for person in participants]
+        for race_name, participants in result.items()
+    }
+    return result_json
+
+
+@app.put("/itra-enrichment", status_code=status.HTTP_202_ACCEPTED)
+def itra_enrichment(url: str, parameters: str, tasks: BackgroundTasks) -> Any:
+    result = load_participant_list(race_result_url=url, params=parameters)
+    for race_name, participants in result.items():
+        tasks.add_task(itra_enrich_participants, participants)
+    return 0
 
 
 async def get_utmb_score(person: Person) -> int:
     return 0
 
 
-async def get_itra_score(person: Person) -> int:
+async def itra_enrich_participants(participants: list[Person]) -> None:
+    for participant in participants:
+        await update_itra_score(person=participant)
+        logger.info(
+            f"Enriched {participant.firstname} {participant.lastname} with ITRA score {participant.itra_points}"
+        )
+
+
+async def update_itra_score(person: Person) -> None:
     async with httpx.AsyncClient(timeout=60) as client:
         data = {"name": person.firstname + " " + person.lastname, "start": "1", "count": "10"}
         url = "https://itra.run/api/runner/find"
@@ -77,4 +90,8 @@ async def get_itra_score(person: Person) -> int:
         runners = response.json()["results"]
         # TODO: implement better selection algorithm using age and nationality
         selected_runner = runners[0]
-        return int(selected_runner.get("pi", 0))
+        person.itra_points = int(selected_runner.get("pi", 0))
+
+
+if __name__ == "__main__":
+    uvicorn.run(app, host="0.0.0.0", port=8000)

@@ -1,4 +1,17 @@
+from dataclasses import dataclass
+
 import pandas as pd
+
+
+@dataclass
+class Person:
+    def __init__(self, firstname: str, lastname: str, nationality: str, age: int) -> None:  # noqa: D107
+        self.firstname = firstname
+        self.lastname = lastname
+        self.nationality = nationality
+        self.age = age
+        self.itra_points: int = 0
+        self.utmb_points: int = 0
 
 
 def get_contest_name(contests: dict, contest_id: str) -> str:
@@ -21,13 +34,21 @@ def parse_participant_lists(
     return lists
 
 
-def clean_participants_df(participants_df: pd.DataFrame, columns: list[str]) -> pd.DataFrame:
-    # drop additional columns for which we don't have a description (e.g. color columns)
-    if participants_df.shape[1] > len(columns):
-        to_drop = participants_df.shape[1] - len(columns)
-        participants_df = participants_df.drop(participants_df.columns[-to_drop:], axis=1)
-    participants_df.columns = columns  # type: ignore[assignment]
-    # drop empty column if it exists
-    if '""' in participants_df.columns:
-        participants_df = participants_df.drop('""', axis=1)
-    return participants_df
+# TODO improve to obtain first and last name
+def get_first_lastname(participant: list[str], columns: list[str]) -> tuple[str, str]:
+    name_fields = [
+        idx
+        for idx, entry in enumerate(columns)
+        if "name" in entry.lower() and "nation" not in entry.lower() and "age" not in entry.lower()
+    ]
+    return "".join([participant[idx] for idx in name_fields]), ""
+
+
+def parse_persons(participants: list[list[str]], columns: list[str]) -> list[Person]:
+    persons = []
+    for participant in participants:
+        firstname, lastname = get_first_lastname(participant, columns)
+        nationality = ""
+        age = 0  # participant.split(";")
+        persons.append(Person(firstname, lastname, nationality, int(age)))
+    return persons

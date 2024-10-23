@@ -1,41 +1,33 @@
 from typing import cast
 
 import httpx
-import pandas as pd
 from loguru import logger
 from tenacity import retry, wait_random
 
-from trailrunning_scoring.parser import parse_participant_lists
+from trailrunning_scoring.parser import (
+    Person,
+    parse_participant_lists,
+    parse_persons,
+)
 
 ### HTTP requests to raceresult, ITRA and UTMB APIs
 
 
-def load_participant_list(
-    race_result_url: str, key: str, listname: str, contest_id: int
-) -> tuple[dict[str, pd.DataFrame], list[str]]:
-    logger.info("Loading participant list")
-    params = {
-        "key": key,
-        "listname": listname,
-        # "page": "participants",
-        "contest": str(contest_id),
-        # "r": "all",
-        # "l": "0",
-    }
-    response = httpx.get(url=race_result_url + "/RRPublish/data/list", params=params)
+def load_participant_list(race_result_url: str, params: str) -> dict[str, list[Person]]:
+    race_result_url = race_result_url.rstrip("/")
+    response = httpx.get(url=race_result_url + "/RRPublish/data/list?" + params)
     response_json = response.json()
     races = response_json["data"]
     fields = response_json["list"]["Fields"]
     columns = [""] + [field["Expression"] for field in fields]
 
-    race_participants: dict[str, pd.DataFrame] = {}
+    race_participants: dict[str, list[Person]] = {}
     if isinstance(races, dict):
         for race_name, participants in races.items():
-            race_participants[race_name] = pd.DataFrame(participants)
+            race_participants[race_name] = parse_persons(participants, columns)
     elif isinstance(races, list):
-        race_participants[""] = pd.DataFrame(races)
-
-    return race_participants, columns
+        race_participants[""] = parse_persons(races, columns)
+    return race_participants
 
 
 def load_event_overview(race_result_url: str) -> tuple[str, list[dict[str, str]]]:
