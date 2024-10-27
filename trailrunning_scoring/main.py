@@ -1,10 +1,14 @@
+import asyncio
+import hashlib
 import json
+from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from enum import StrEnum
-from itertools import chain
+from pathlib import Path
 from typing import Any
 
+import aiofiles
 import httpx
-import pandas as pd
 import uvicorn
 from fastapi import BackgroundTasks, FastAPI, HTTPException, status
 from fastapi.responses import JSONResponse
@@ -15,7 +19,7 @@ from trailrunning_scoring.api_requests import (
     load_event_overview,
     load_participant_list,
 )
-from trailrunning_scoring.parser import Person
+from trailrunning_scoring.parser import EnrichedList, Person
 
 
 class PointSystem(StrEnum):
@@ -23,20 +27,33 @@ class PointSystem(StrEnum):
     utmb = "UTMB"
 
 
+@dataclass
+class EnrichmentTask:
+    total: int
+    completed: int = field(default=0, init=False)
+
+    def get_progress(self) -> int:
+        """Return progress percentage between 0 and 100."""
+        return int((self.completed / self.total) * 100)
+
+
+task_list: dict[str, EnrichmentTask] = {}  # keys are the urls
+
 app = FastAPI()
 
 
 @app.get("/score")
-async def get_score(system: PointSystem, name: str, age: int = -1, nationality: str = "") -> Any:
-    """Get the score of a participant."""
+async def get_score(
+    system: PointSystem, firstname: str, age: int = -1, nationality: str = ""
+) -> int | None:
+    """Retrieve the ITRA/UTMB score of a participant."""
+    participant = Person(firstname=firstname, lastname="", nationality=nationality, age=age)
     if system == PointSystem.itra:
-        person = Person(firstname=name, lastname="", nationality=nationality, age=age)
-        await update_itra_score(person=person)
-        return person.itra_points
+        await update_itra_score(person=participant)
+        return participant.itra_points
+
     assert system == PointSystem.utmb
-    return await get_utmb_score(
-        person=Person(firstname=name, lastname="", nationality=nationality, age=age)
-    )
+    return await get_utmb_score(person=participant)
 
 
 @app.get("/overview")
@@ -52,34 +69,68 @@ def get_lists(url: str) -> dict[str, Any]:
 
 
 @app.get("/participants")
-def get_participants(url: str, parameters: str) -> Any:
-    result = load_participant_list(race_result_url=url, params=parameters)
-    # map each item of result from dataframe to json
-    result_json = {
-        race_name: [json.dumps(person.__dict__) for person in participants]
-        for race_name, participants in result.items()
-    }
-    return result_json
+def get_participants(url: str) -> list[Person]:
+    return load_participant_list(race_result_url=url)
+
+
+@app.get("/tasks")
+def get_tasks() -> list[tuple[str, int]]:
+    return [(k, v.get_progress()) for k, v in task_list.items()]
 
 
 @app.put("/itra-enrichment", status_code=status.HTTP_202_ACCEPTED)
-def itra_enrichment(url: str, parameters: str, tasks: BackgroundTasks) -> Any:
-    result = load_participant_list(race_result_url=url, params=parameters)
-    for race_name, participants in result.items():
-        tasks.add_task(itra_enrich_participants, participants)
-    return 0
+def itra_enrichment(url: str, tasks: BackgroundTasks) -> list[Person]:
+    participants: list[Person] = load_participant_list(race_result_url=url)
+    tasks.add_task(itra_enrich_participants, url, participants)
+    return participants
+
+
+@app.get("/enriched_list", response_model=EnrichedList, responses={404: {"model": str}})
+def get_enriched_list(url: str) -> Any:
+    filename = encode_filename(url)
+    file_path = Path(filename)
+    # if such a file exists return it, otherwise return 404
+    if Path(file_path).exists():
+        with Path.open(file_path) as f:
+            # read file, parse to json and return
+            return json.loads(f.read())
+    return JSONResponse(status_code=404, content="No file found for " + url)
+
+
+@app.get("/progress", response_model=int, responses={404: {"model": str}})
+def progress(url: str) -> Any:
+    # TODO check for completed task in form of file
+    if url in task_list:
+        return task_list[url].get_progress()
+    return JSONResponse(status_code=404, content="No task found for " + url)
 
 
 async def get_utmb_score(person: Person) -> int:
     return 0
 
 
-async def itra_enrich_participants(participants: list[Person]) -> None:
-    for participant in participants:
-        await update_itra_score(person=participant)
-        logger.info(
-            f"Enriched {participant.firstname} {participant.lastname} with ITRA score {participant.itra_points}"
-        )
+async def itra_enrich_participants(name: str, participants: list[Person]) -> None:
+    result: dict[str, Any] = {"name": name, "timestamp": datetime.now(UTC).isoformat()}
+    task_list[name] = EnrichmentTask(total=len(participants))
+    aws = {asyncio.create_task(update_itra_score(participant)) for participant in participants}
+    # after each task is completed, update progress
+    while aws:
+        _, aws = await asyncio.wait(aws, return_when=asyncio.FIRST_COMPLETED)
+        task_list[name].completed += 1
+        if task_list[name].completed % 10 == 0:
+            logger.info(f"Completed {task_list[name].completed} of {task_list[name].total}")
+
+    logger.info("Finished enriching for " + name)
+    result["participants"] = [p.model_dump() for p in participants]
+    filename = encode_filename(name)
+    async with aiofiles.open(filename, mode="w") as file:
+        await file.write(json.dumps(result))
+    task_list.pop(name)
+
+
+def encode_filename(name: str) -> str:
+    hashed_name = hashlib.sha256(name.encode()).hexdigest()
+    return hashed_name + ".json"
 
 
 async def update_itra_score(person: Person) -> None:
@@ -89,9 +140,10 @@ async def update_itra_score(person: Person) -> None:
         response = await get_from_website(client=client, url=url, data=data)
         runners = response.json()["results"]
         # TODO: implement better selection algorithm using age and nationality
-        selected_runner = runners[0]
-        person.itra_points = int(selected_runner.get("pi", 0))
+        if len(runners) > 0:
+            selected_runner = runners[0]
+            person.itra_points = selected_runner.get("pi", None)
 
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host="127.0.0.0", port=8000)
