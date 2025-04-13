@@ -1,3 +1,4 @@
+from http import HTTPStatus
 from typing import cast
 
 import httpx
@@ -32,7 +33,8 @@ def load_participant_list(race_result_url: str) -> list[Person]:
 
 def load_event_overview(race_result_url: str) -> tuple[str, list[dict[str, str]]]:
     base_url = race_result_url.rstrip("/") + "/RRPublish/data/"
-    response = httpx.get(url=base_url + "config?page=participants&noVisitor=1")
+    response = httpx.get(url=base_url + "config?page=participants&v=1")
+
     result_json = cast(dict, response.json())
     eventname = result_json.get("eventname", "")
     participant_lists = parse_participant_lists(
@@ -49,7 +51,7 @@ async def update_itra_score(person: Person) -> None:
         data = {"name": person.firstname + " " + person.lastname, "start": "1", "count": "10"}
         url = "https://itra.run/api/runner/find"
         response = await get_from_website(client=client, url=url, data=data)
-        if response.status_code != 200:
+        if response.status_code != HTTPStatus.OK:
             logger.error(f"ITRA API request failed with status {response.status_code}")
             return
         runners = response.json()["results"]
@@ -63,6 +65,7 @@ async def update_itra_score(person: Person) -> None:
 @retry(wait=wait_random(min=0.1, max=1.5))
 async def get_from_website(client: httpx.AsyncClient, url: str, data: dict) -> httpx.Response:
     headers = {  # necessary for ITRA API requests, otherwise you get error 403
-        "user-agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
+        "user-agent": "Mozilla/5.0 (X11; Linux x86_64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
     }
     return await client.post(url=url, data=data, headers=headers)

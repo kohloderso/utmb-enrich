@@ -11,6 +11,7 @@ import aiofiles
 import httpx
 import uvicorn
 from fastapi import BackgroundTasks, FastAPI, HTTPException, status
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from loguru import logger
 
@@ -40,6 +41,19 @@ class EnrichmentTask:
 task_list: dict[str, EnrichmentTask] = {}  # keys are the urls
 
 app = FastAPI()
+
+origins = [
+    "http://localhost",
+    "http://localhost:5173",
+]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 @app.get("/score")
@@ -86,26 +100,25 @@ def itra_enrichment(url: str, tasks: BackgroundTasks) -> list[Person]:
 
 
 @app.get("/enriched_list", response_model=EnrichedList, responses={404: {"model": str}})
-def get_enriched_list(url: str) -> Any:
+def get_enriched_list(url: str) -> JSONResponse:
     filename = encode_filename(url)
     file_path = Path(filename)
     # if such a file exists return it, otherwise return 404
     if Path(file_path).exists():
         with Path.open(file_path) as f:
             # read file, parse to json and return
-            return json.loads(f.read())
+            return json.loads(f.read())  # type: ignore[no-any-return]
     return JSONResponse(status_code=404, content="No file found for " + url)
 
 
 @app.get("/progress", response_model=int, responses={404: {"model": str}})
-def progress(url: str) -> Any:
-    # TODO check for completed task in form of file
+def progress(url: str) -> JSONResponse | int:
     if url in task_list:
         return task_list[url].get_progress()
     return JSONResponse(status_code=404, content="No task found for " + url)
 
 
-async def get_utmb_score(person: Person) -> int:
+async def get_utmb_score(_person: Person) -> int:
     return 0
 
 
@@ -146,4 +159,4 @@ async def update_itra_score(person: Person) -> None:
 
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="127.0.0.0", port=8000)
+    uvicorn.run(app, host="0.0.0.0", port=8080)  # noqa: S104

@@ -1,5 +1,3 @@
-from dataclasses import dataclass
-
 from pydantic import BaseModel
 
 
@@ -36,7 +34,7 @@ def parse_participant_lists(
         }
         for item in lists_json
     ]
-    return lists
+    return lists  # noqa: RET504
 
 
 # TODO: improve to obtain first and last name
@@ -61,7 +59,8 @@ def parse_persons(participants: list[list[str]], columns: list[str], contest: st
                 lastname=lastname,
                 nationality=nationality,
                 age=int(age),
-                contest=contest,  # TODO either get contest from top-level or parse from one of the columns
+                contest=contest,
+                # TODO: either get contest from top-level or parse from one of the columns
             )
         )
     return persons
