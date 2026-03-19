@@ -1,3 +1,4 @@
+import re
 from http import HTTPStatus
 from typing import cast
 
@@ -9,6 +10,13 @@ from trailrunning_scoring.parser import (
     Person,
     parse_participant_lists,
     parse_persons,
+)
+
+ITRA_WEBSITE_URL = "https://itra.run/"
+ITRA_USER_AGENT = (
+    "Mozilla/5.0 (X11; Linux x86_64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/146.0.0.0 Safari/537.36"
 )
 
 ### HTTP requests to raceresult, ITRA and UTMB APIs
@@ -35,7 +43,8 @@ def load_event_overview(race_result_url: str) -> tuple[str, list[dict[str, str]]
     base_url = race_result_url.rstrip("/") + "/RRPublish/data/"
     response = httpx.get(url=base_url + "config?page=participants&v=1")
 
-    result_json = cast(dict, response.json())
+    result_json = cast("dict", response.json())
+    logger.info(f"Received event overview data: {result_json}")
     eventname = result_json.get("eventname", "")
     participant_lists = parse_participant_lists(
         base_url + "list?",
@@ -54,18 +63,41 @@ async def update_itra_score(person: Person) -> None:
         if response.status_code != HTTPStatus.OK:
             logger.error(f"ITRA API request failed with status {response.status_code}")
             return
-        runners = response.json()["results"]
+        response_json = cast("dict", response.json())
+        runners = response_json.get("results", [])
         # TODO: implement better selection algorithm using age and nationality
         if len(runners) > 0:
             selected_runner = runners[0]
             person.itra_points = selected_runner.get("pi", None)
 
 
+async def _fetch_itra_csrf_token(client: httpx.AsyncClient) -> str | None:
+    response = await client.get(ITRA_WEBSITE_URL, headers={"user-agent": ITRA_USER_AGENT})
+    if response.status_code != HTTPStatus.OK:
+        logger.error(f"ITRA bootstrap request failed with status {response.status_code}")
+        return None
+
+    token_match = re.search(
+        r'name="__RequestVerificationToken"\s+type="hidden"\s+value="([^"]+)"',
+        response.text,
+    )
+    if token_match is None:
+        logger.error("Could not extract ITRA anti-forgery token from bootstrap page")
+        return None
+    return token_match.group(1)
+
+
 # @retry(retry=retry_if_exception_type(httpx.ConnectTimeout), wait=wait_random(min=0.1, max=1.5))
 @retry(wait=wait_random(min=0.1, max=1.5))
 async def get_from_website(client: httpx.AsyncClient, url: str, data: dict) -> httpx.Response:
-    headers = {  # necessary for ITRA API requests, otherwise you get error 403
-        "user-agent": "Mozilla/5.0 (X11; Linux x86_64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
-    }
+    headers = {"user-agent": ITRA_USER_AGENT}
+
+    # ITRA API endpoints require anti-forgery cookie + token from a browser-like session.
+    if url.startswith("https://itra.run/api/"):
+        csrf_token = await _fetch_itra_csrf_token(client=client)
+        if csrf_token is not None:
+            headers["x-csrf-token"] = csrf_token
+            headers["origin"] = "https://itra.run"
+            headers["referer"] = ITRA_WEBSITE_URL
+
     return await client.post(url=url, data=data, headers=headers)

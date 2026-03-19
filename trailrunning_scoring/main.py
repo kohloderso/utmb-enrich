@@ -72,11 +72,11 @@ async def get_score(
 
 @app.get("/overview")
 def get_lists(url: str) -> dict[str, Any]:
-    if not url.startswith("https://my.raceresult.com/"):
-        raise HTTPException(
-            status_code=422,
-            detail=f"Can't read data from {url}. Only https://my.raceresult.com/ is supported",
-        )
+    # if not url.startswith("https://my.raceresult.com/"):
+    #     raise HTTPException(
+    #         status_code=422,
+    #         detail=f"Can't read data from {url}. Only https://my.raceresult.com/ is supported",
+    #     )
     race_result_url = url.rstrip("/")
     eventname, lists = load_event_overview(race_result_url)
     return {"eventname": eventname, "lists": lists}
@@ -126,6 +126,7 @@ async def itra_enrich_participants(name: str, participants: list[Person]) -> Non
     result: dict[str, Any] = {"name": name, "timestamp": datetime.now(UTC).isoformat()}
     task_list[name] = EnrichmentTask(total=len(participants))
     aws = {asyncio.create_task(update_itra_score(participant)) for participant in participants}
+    logger.info(f"Started enriching for {name} with {len(participants)} participants")
     # after each task is completed, update progress
     while aws:
         _, aws = await asyncio.wait(aws, return_when=asyncio.FIRST_COMPLETED)
@@ -148,10 +149,15 @@ def encode_filename(name: str) -> str:
 
 async def update_itra_score(person: Person) -> None:
     async with httpx.AsyncClient(timeout=60) as client:
-        data = {"name": person.firstname + " " + person.lastname, "start": "1", "count": "10"}
-        url = "https://itra.run/api/runner/find"
+        data = {"name": person.firstname + " " + person.lastname}
+        url = "https://itra.run/api/runner/findByName"
         response = await get_from_website(client=client, url=url, data=data)
-        runners = response.json()["results"]
+        if response.status_code != status.HTTP_200_OK:
+            logger.error(f"ITRA API request failed with status {response.status_code}")
+            return
+
+        response_json = response.json()
+        runners = response_json.get("results", []) if isinstance(response_json, dict) else []
         # TODO: implement better selection algorithm using age and nationality
         if len(runners) > 0:
             selected_runner = runners[0]
@@ -159,4 +165,13 @@ async def update_itra_score(person: Person) -> None:
 
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8080)  # noqa: S104
+    # tasks = BackgroundTasks()
+    # participants = itra_enrichment(
+    #     "https://my4.raceresult.com/335483/participants/list?key=3480c7418535f3f8349e412e8ed94dee&listname=TEILNEHMERLISTE%20WEBSITE%7CTNL%20123%20-%2003%20SUPER%20TRAIL&page=participants&contest=0&r=all&l=0&openedGroups=%7B%7D&term=",
+    #     tasks=tasks,
+    # )
+    # asyncio.run(tasks())
+    # person = Person(firstname="Christina", lastname="Kirk", nationality="AUT", age=30)
+    # asyncio.run(update_itra_score(person))
+
+    uvicorn.run(app, host="0.0.0.0", port=8080)
