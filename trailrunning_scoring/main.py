@@ -122,7 +122,7 @@ def itra_enrichment_retry(url: str, tasks: BackgroundTasks) -> list[Person]:
     with Path.open(file_path) as f:
         data = json.loads(f.read())
     all_participants = [Person(**p) for p in data["participants"]]
-    missing = [p for p in all_participants if p.itra_points is None]
+    missing = [p for p in all_participants if p.itra_points is None and not p.itra_queried]
     if missing:
         tasks.add_task(_run_enrichment, url, all_participants, missing)
     return all_participants
@@ -209,6 +209,7 @@ async def update_itra_score(person: Person, client: httpx.AsyncClient) -> bool:
         logger.error(f"ITRA API request failed with status {response.status_code}")
         return False
 
+    person.itra_queried = True
     response_json = response.json()
     runners = response_json.get("results", []) if isinstance(response_json, dict) else []
     # TODO: implement better selection algorithm using age and nationality

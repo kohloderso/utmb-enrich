@@ -10,6 +10,7 @@ class Person(BaseModel):
     club: str = ""
     contest: str = ""
     itra_points: int | None = None
+    itra_queried: bool = False
     utmb_points: int | None = None
 
 
