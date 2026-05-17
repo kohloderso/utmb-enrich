@@ -1,5 +1,7 @@
+import asyncio
 import hashlib
 import json
+import random
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import StrEnum
@@ -75,7 +77,8 @@ async def get_score(
         firstname=firstname, lastname="", gender="", nationality=nationality, age=age
     )
     if system == PointSystem.itra:
-        await update_itra_score(person=participant)
+        async with httpx.AsyncClient(timeout=60) as client:
+            await update_itra_score(person=participant, client=client)
         return participant.itra_points
 
     assert system == PointSystem.utmb
@@ -162,20 +165,27 @@ async def _run_enrichment(
         f"Started enriching for {name}: {len(to_enrich)} of {len(all_participants)} participants"
     )
 
-    for i, participant in enumerate(to_enrich):
-        await update_itra_score(participant)
-        task_list[name].completed = i + 1
+    async with httpx.AsyncClient(timeout=60) as client:
+        for i, participant in enumerate(to_enrich):
+            rate_limited = await update_itra_score(participant, client)
+            task_list[name].completed = i + 1
 
-        result: dict[str, Any] = {
-            "name": name,
-            "timestamp": datetime.now(UTC).isoformat(),
-            "participants": [p.model_dump() for p in all_participants],
-        }
-        async with aiofiles.open(filename, mode="w") as file:
-            await file.write(json.dumps(result))
+            result: dict[str, Any] = {
+                "name": name,
+                "timestamp": datetime.now(UTC).isoformat(),
+                "participants": [p.model_dump() for p in all_participants],
+            }
+            async with aiofiles.open(filename, mode="w") as file:
+                await file.write(json.dumps(result))
 
-        if (i + 1) % 10 == 0:
-            logger.info(f"Completed {i + 1} of {len(to_enrich)}")
+            if rate_limited:
+                logger.warning(f"Rate limited by ITRA after {i + 1} participants — stopping early")
+                break
+
+            if (i + 1) % 10 == 0:
+                logger.info(f"Completed {i + 1} of {len(to_enrich)}")
+
+            await asyncio.sleep(random.uniform(0.5, 1.5))  # noqa: S311
 
     logger.info("Finished enriching for " + name)
     task_list.pop(name)
@@ -186,21 +196,26 @@ def encode_filename(name: str) -> str:
     return hashed_name + ".json"
 
 
-async def update_itra_score(person: Person) -> None:
-    async with httpx.AsyncClient(timeout=60) as client:
-        data = {"name": person.firstname + " " + person.lastname}
-        url = "https://itra.run/api/runner/findByName"
-        response = await get_from_website(client=client, url=url, data=data)
-        if response.status_code != status.HTTP_200_OK:
-            logger.error(f"ITRA API request failed with status {response.status_code}")
-            return
+async def update_itra_score(person: Person, client: httpx.AsyncClient) -> bool:
+    """Fetch and set the ITRA score for `person`. Returns True if rate-limited (403)."""
+    logger.info(person.firstname)
+    data = {"name": person.firstname + " " + person.lastname}
+    url = "https://itra.run/api/runner/findByName"
+    response = await get_from_website(client=client, url=url, data=data)
 
-        response_json = response.json()
-        runners = response_json.get("results", []) if isinstance(response_json, dict) else []
-        # TODO: implement better selection algorithm using age and nationality
-        if len(runners) > 0:
-            selected_runner = runners[0]
-            person.itra_points = selected_runner.get("pi", None)
+    if response.status_code == status.HTTP_403_FORBIDDEN:
+        return True
+    if response.status_code != status.HTTP_200_OK:
+        logger.error(f"ITRA API request failed with status {response.status_code}")
+        return False
+
+    response_json = response.json()
+    runners = response_json.get("results", []) if isinstance(response_json, dict) else []
+    # TODO: implement better selection algorithm using age and nationality
+    if len(runners) > 0:
+        selected_runner = runners[0]
+        person.itra_points = selected_runner.get("pi", None)
+    return False
 
 
 if __name__ == "__main__":
