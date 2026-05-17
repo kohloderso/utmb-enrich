@@ -9,7 +9,7 @@ from typing import Any
 import aiofiles
 import httpx
 import uvicorn
-from fastapi import BackgroundTasks, FastAPI, status
+from fastapi import BackgroundTasks, FastAPI, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.routing import APIRoute
@@ -107,8 +107,22 @@ def get_tasks() -> list[tuple[str, int]]:
 @app.put("/itra-enrichment", status_code=status.HTTP_202_ACCEPTED)
 def itra_enrichment(url: str, tasks: BackgroundTasks) -> list[Person]:
     participants: list[Person] = load_participant_list(race_result_url=url)
-    tasks.add_task(itra_enrich_participants, url, participants)
+    tasks.add_task(_run_enrichment, url, participants, participants)
     return participants
+
+
+@app.put("/itra-enrichment/retry", status_code=status.HTTP_202_ACCEPTED)
+def itra_enrichment_retry(url: str, tasks: BackgroundTasks) -> list[Person]:
+    file_path = Path(encode_filename(url))
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail="No cached list found for " + url)
+    with Path.open(file_path) as f:
+        data = json.loads(f.read())
+    all_participants = [Person(**p) for p in data["participants"]]
+    missing = [p for p in all_participants if p.itra_points is None]
+    if missing:
+        tasks.add_task(_run_enrichment, url, all_participants, missing)
+    return all_participants
 
 
 @app.get("/enriched_list", response_model=EnrichedList, responses={404: {"model": str}})
@@ -138,26 +152,30 @@ async def get_utmb_score(_person: Person) -> int:
     return 0
 
 
-async def itra_enrich_participants(name: str, participants: list[Person]) -> None:
-    task_list[name] = EnrichmentTask(total=len(participants))
+async def _run_enrichment(
+    name: str, all_participants: list[Person], to_enrich: list[Person]
+) -> None:
+    """Enrich `to_enrich` (a subset of `all_participants`) and persist the full list after each one."""
+    task_list[name] = EnrichmentTask(total=len(to_enrich))
     filename = encode_filename(name)
-    logger.info(f"Started enriching for {name} with {len(participants)} participants")
+    logger.info(
+        f"Started enriching for {name}: {len(to_enrich)} of {len(all_participants)} participants"
+    )
 
-    for i, participant in enumerate(participants):
+    for i, participant in enumerate(to_enrich):
         await update_itra_score(participant)
         task_list[name].completed = i + 1
 
-        # Save full list after each participant so partial results are available immediately
         result: dict[str, Any] = {
             "name": name,
             "timestamp": datetime.now(UTC).isoformat(),
-            "participants": [p.model_dump() for p in participants],
+            "participants": [p.model_dump() for p in all_participants],
         }
         async with aiofiles.open(filename, mode="w") as file:
             await file.write(json.dumps(result))
 
         if (i + 1) % 10 == 0:
-            logger.info(f"Completed {i + 1} of {len(participants)}")
+            logger.info(f"Completed {i + 1} of {len(to_enrich)}")
 
     logger.info("Finished enriching for " + name)
     task_list.pop(name)
