@@ -7,6 +7,7 @@ from loguru import logger
 from tenacity import retry, wait_random
 
 from trailrunning_scoring.parser import (
+    ParticipantList,
     Person,
     parse_participant_lists,
     parse_persons,
@@ -39,7 +40,7 @@ def load_participant_list(race_result_url: str) -> list[Person]:
     return race_participants
 
 
-def load_event_overview(race_result_url: str) -> tuple[str, list[dict[str, str]]]:
+def load_event_overview(race_result_url: str) -> tuple[str, list[ParticipantList]]:
     base_url = race_result_url.rstrip("/") + "/RRPublish/data/"
     response = httpx.get(url=base_url + "config?page=participants&v=1")
 

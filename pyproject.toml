@@ -20,6 +20,7 @@ dependencies = [
     "fastapi[standard]>=0.115.2,<0.116",
     "aiofiles>=24.1.0,<25",
     "types-aiofiles>=24.1.0.20240626,<25",
+    "pydantic>=2.9.2",
 ]
 
 [dependency-groups]
@@ -53,7 +54,7 @@ strict = true
 
 [tool.ruff]
 line-length = 100
-target-version = "py313"
+target-version = "py312"
 
 [tool.ruff.lint]
 select = ["ALL"]
